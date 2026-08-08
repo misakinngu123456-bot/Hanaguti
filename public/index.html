@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ガーティックフォン風ゲーム</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f0f2f5;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 0;
+      padding: 20px;
+    }
+    .card {
+      background: #ffffff;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      width: 100%;
+      max-width: 450px;
+      text-align: center;
+    }
+    canvas {
+      border: 2px solid #333;
+      border-radius: 8px;
+      cursor: crosshair;
+      touch-action: none;
+      background: #fff;
+      margin-top: 10px;
+    }
+    .controls {
+      margin-top: 10px;
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+    }
+    input[type="text"] {
+      width: 80%;
+      padding: 10px;
+      font-size: 16px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+    }
+    button {
+      padding: 10px 18px;
+      font-size: 15px;
+      font-weight: bold;
+      color: #fff;
+      background-color: #007bff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button:hover { background-color: #0056b3; }
+    button.clear { background-color: #dc3545; }
+    button.clear:hover { background-color: #a71d2a; }
+    img.preview {
+      max-width: 100%;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h2>🎨 ガーティックフォン風ゲーム</h2>
+  
+  <div id="display-area">
+    <p>読み込み中...</p>
+  </div>
+
+  <hr style="margin: 20px 0; border: 0; border-top: 1px solid #eee;">
+
+  <div id="action-area"></div>
+
+  <br>
+  <button onclick="resetGame()" style="background-color:#6c757d; font-size:12px; padding:6px 12px;">ゲームを最初からやり直す</button>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+  let isDrawing = false;
+  let canvas, ctx;
+
+  socket.on('init_state', (data) => updateUI(data.lastStep));
+  socket.on('next_turn', (data) => updateUI(data.lastStep));
+  socket.on('game_reset', () => updateUI(null));
+
+  function updateUI(lastStep) {
+    const displayArea = document.getElementById('display-area');
+    const actionArea = document.getElementById('action-area');
+
+    if (!lastStep) {
+      // 最初のターン（お題入力）
+      displayArea.innerHTML = '<h3>第1ターン：最初のお題</h3><p>好きなお題を入力してください！</p>';
+      actionArea.innerHTML = `
+        <input type="text" id="text-input" placeholder="例：宇宙を泳ぐマグロ">
+        <br><br>
+        <button onclick="submitText()">お題を送信</button>
+      `;
+    } else if (lastStep.type === 'text') {
+      // お題を受けて絵を描くターン
+      displayArea.innerHTML = `<h3>前のお題:</h3><h2 style="color:#007bff;">「${lastStep.content}」</h2><p>この絵を描いてください！</p>`;
+      actionArea.innerHTML = `
+        <canvas id="canvas" width="360" height="270"></canvas>
+        <div class="controls">
+          <button class="clear" onclick="clearCanvas()">消す</button>
+          <button onclick="submitImage()">絵を送信</button>
+        </div>
+      `;
+      initCanvas();
+    } else if (lastStep.type === 'image') {
+      // 絵を見てお題を当てるターン
+      displayArea.innerHTML = `<h3>前の人の絵:</h3><img class="preview" src="${lastStep.content}"><p>この絵が何か当てて入力してください！</p>`;
+      actionArea.innerHTML = `
+        <input type="text" id="text-input" placeholder="例：空飛ぶペンギン">
+        <br><br>
+        <button onclick="submitText()">回答を送信</button>
+      `;
+    }
+  }
+
+  function initCanvas() {
+    canvas = document.getElementById('canvas');
+    ctx = canvas.getContext('2d');
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#000000';
+
+    // PC マウス操作
+    canvas.addEventListener('mousedown', (e) => { isDrawing = true; draw(e); });
+    canvas.addEventListener('mouseup', () => { isDrawing = false; ctx.beginPath(); });
+    canvas.addEventListener('mousemove', draw);
+
+    // スマホ タッチ操作
+    canvas.addEventListener('touchstart', (e) => { isDrawing = true; draw(e.touches[0]); });
+    canvas.addEventListener('touchend', () => { isDrawing = false; ctx.beginPath(); });
+    canvas.addEventListener('touchmove', (e) => { e.preventDefault(); draw(e.touches[0]); });
+  }
+
+  function draw(e) {
+    if (!isDrawing) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  }
+
+  function clearCanvas() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  function submitText() {
+    const text = document.getElementById('text-input').value.trim();
+    if (!text) return alert('文字を入力してください');
+    socket.emit('submit_turn', { type: 'text', content: text });
+  }
+
+  function submitImage() {
+    const dataUrl = canvas.toDataURL();
+    socket.emit('submit_turn', { type: 'image', content: dataUrl });
+  }
+
+  function resetGame() {
+    if (confirm('ゲームをリセットしてもよろしいですか？')) {
+      socket.emit('reset_game');
+    }
+  }
+</script>
+
+</body>
+</html>
